@@ -120,6 +120,31 @@ def walk(obj) -> Iterable:
         yield obj
 
 
+def deep_parse(obj, _depth: int = 0):
+    """Recursively expand string fields that are themselves JSON-encoded.
+
+    Skool nests JSON-as-a-string inside several fields (e.g. metadata.
+    attachments_data, metadata.contributors). Left unparsed, a plain
+    substring check against such a field matches the *entire* blob instead
+    of the actual URL inside it, corrupting extraction. Expanding these
+    fields first makes every leaf a genuine, individually-checkable value.
+    """
+    if _depth > 12:
+        return obj
+    if isinstance(obj, dict):
+        return {k: deep_parse(v, _depth + 1) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [deep_parse(v, _depth + 1) for v in obj]
+    if isinstance(obj, str):
+        s = obj.strip()
+        if len(s) > 1 and s[0] in "{[" and s[-1] in "}]":
+            try:
+                return deep_parse(json.loads(s), _depth + 1)
+            except Exception:
+                return obj
+    return obj
+
+
 def walk_dicts(obj) -> Iterable[dict]:
     """Yield every dict inside a nested structure."""
     if isinstance(obj, dict):
@@ -386,15 +411,22 @@ class SkoolDownloader:
                     continue
 
             data = await self.next_data(page)
+            if data:
+                data = deep_parse(data)
 
             # --- Beschreibungstext + Medien aus dem JSON --------------------
             description_parts: list[str] = []
+            attachment_urls: list[str] = []
             if data:
                 if self.debug:
                     self._dump_debug(data, safe, sub=dest)
                 for v in walk(data):
+                    if not isinstance(v, str):
+                        continue
                     if is_video_url(v):
                         intercepted.append(v)
+                    elif is_attachment_url(v):
+                        attachment_urls.append(v)
                 # Text-Felder einsammeln (Beschreibung, Inhalt, Body …)
                 for node in walk_dicts(data):
                     for key in ("description", "content", "body", "text", "post"):
@@ -431,14 +463,18 @@ class SkoolDownloader:
                     text = (await link.inner_text()).strip()
                     await self._download_file(full, dest, text, page)
 
-            # --- Dateianhänge (aus JSON) -----------------------------------
+            # --- Dateianhänge (aus JSON, mit hübschem Namen falls vorhanden) ---
             if data:
                 for node in walk_dicts(data):
-                    for key in ("url", "link", "href", "downloadUrl", "fileUrl"):
+                    for key in ("url", "link", "href", "downloadUrl", "fileUrl", "src", "file"):
                         val = node.get(key)
                         if is_attachment_url(val):
-                            name = node.get("name") or node.get("filename") or ""
+                            name = node.get("name") or node.get("filename") or node.get("title") or ""
                             await self._download_file(val, dest, name, page)
+
+            # --- Dateianhänge (generischer Fallback ohne bekannten Namen) ------
+            for url in attachment_urls:
+                await self._download_file(url, dest, "", page)
 
         finally:
             page.remove_listener("request", _on_request)
