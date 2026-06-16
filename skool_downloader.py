@@ -175,6 +175,7 @@ class SkoolDownloader:
         community_slug: Optional[str] = None,
         headless: bool = True,
         debug: bool = True,
+        classroom_only: bool = False,
     ):
         self.email = email
         self.password = password
@@ -182,6 +183,7 @@ class SkoolDownloader:
         self.community_slug = community_slug
         self.headless = headless
         self.debug = debug
+        self.classroom_only = classroom_only
         self._cookies: list = []
         self._done: set[str] = set()
 
@@ -701,12 +703,15 @@ class SkoolDownloader:
                     await asyncio.sleep(1)
                 self._write_classroom_overview(classroom_dir)
 
-                # --- Feed ---
-                feed_dir = comm_dir / "feed"
-                posts = await self.get_feed_posts(page, slug)
-                for idx, post in enumerate(posts, 1):
-                    await self.process_url(page, post, feed_dir, idx)
-                    await asyncio.sleep(1)
+                # --- Feed (optional, kann sehr viele Posts sein) ---
+                if self.classroom_only:
+                    self.log("  (Feed übersprungen – nur Classroom, --classroom-only)")
+                else:
+                    feed_dir = comm_dir / "feed"
+                    posts = await self.get_feed_posts(page, slug)
+                    for idx, post in enumerate(posts, 1):
+                        await self.process_url(page, post, feed_dir, idx)
+                        await asyncio.sleep(1)
 
                 self.log(f"✓ Community {slug} abgeschlossen")
 
@@ -736,6 +741,10 @@ Beispiele:
     parser.add_argument("--community", default=None, help="Nur diese Community (Slug aus URL)")
     parser.add_argument("--no-headless", action="store_true", help="Browser-Fenster anzeigen")
     parser.add_argument("--no-debug", action="store_true", help="Keine Roh-JSON-Dateien speichern")
+    parser.add_argument(
+        "--classroom-only", action="store_true",
+        help="Nur den Classroom laden (ohne die oft hunderte Feed-Posts)",
+    )
     args = parser.parse_args()
 
     downloader = SkoolDownloader(
@@ -745,6 +754,7 @@ Beispiele:
         community_slug=args.community,
         headless=not args.no_headless,
         debug=not args.no_debug,
+        classroom_only=args.classroom_only,
     )
     asyncio.run(downloader.run())
 
