@@ -334,23 +334,33 @@ class SkoolDownloader:
                 continue
 
             for node in tree.get("children", []) or []:
-                lessons.extend(self._flatten_modules(node, slug, root_name, root_title))
+                lessons.extend(self._flatten_modules(node, slug, root_name, root_title, [root_title]))
 
         self.log(f"  ✓ {len(lessons)} Lektionen insgesamt gefunden")
         return lessons
 
-    def _flatten_modules(self, node: dict, slug: str, root_name: str, path_prefix: str) -> list[dict]:
-        """Recursively flatten a course's module tree into lesson entries."""
+    def _flatten_modules(
+        self, node: dict, slug: str, root_name: str, path_prefix: str, breadcrumb: list[str]
+    ) -> list[dict]:
+        """Recursively flatten a course's module tree into lesson entries.
+
+        `breadcrumb` carries the chain of Modul/Abschnitt titles down to this
+        node so process_url() can build a matching nested folder structure
+        (Modul/Abschnitt/Lektion) instead of dumping every lesson flat into
+        one folder.
+        """
         out: list[dict] = []
         course = node.get("course") or {}
         node_id = course.get("id")
         title = (course.get("metadata") or {}).get("title") or course.get("name") or node_id
-        full_title = f"{path_prefix} - {title}" if path_prefix else str(title)
+        title = str(title)
+        full_title = f"{path_prefix} - {title}" if path_prefix else title
+        crumb = breadcrumb + [title]
         if node_id:
             url = f"{self.BASE}/{slug}/classroom/{root_name}?md={node_id}"
-            out.append({"url": url, "title": full_title})
+            out.append({"url": url, "title": full_title, "breadcrumb": crumb})
         for child in node.get("children", []) or []:
-            out.extend(self._flatten_modules(child, slug, root_name, full_title))
+            out.extend(self._flatten_modules(child, slug, root_name, full_title, crumb))
         return out
 
     # ------------------------------------------------------------------
@@ -381,8 +391,16 @@ class SkoolDownloader:
 
     async def process_url(self, page: Page, item: dict, base_dir: Path, index: int):
         title = item["title"]
-        safe = f"{index:03d}_{sanitize(title)}"
-        dest = base_dir / safe
+        breadcrumb = item.get("breadcrumb")
+        if breadcrumb:
+            # Modul/Abschnitt/.../Lektion als verschachtelte Ordner statt
+            # alles flach mit einem zusammengeklatschten Titel abzulegen.
+            dest = base_dir
+            for part in breadcrumb[:-1]:
+                dest = dest / sanitize(part)
+            dest = dest / f"{index:03d}_{sanitize(breadcrumb[-1])}"
+        else:
+            dest = base_dir / f"{index:03d}_{sanitize(title)}"
         dest.mkdir(parents=True, exist_ok=True)
         self.log(f"    · {title}")
 
@@ -629,6 +647,26 @@ class SkoolDownloader:
         except Exception:
             pass
 
+    def _write_classroom_overview(self, classroom_dir: Path):
+        """Aggregate every lesson's links.txt into one breadcrumb-grouped
+        overview file, so all video/attachment links can be skimmed
+        without opening every single lesson folder."""
+        overview: list[str] = []
+        for links_file in sorted(classroom_dir.rglob("links.txt")):
+            content = links_file.read_text(encoding="utf-8").strip()
+            if not content:
+                continue
+            rel_parts = links_file.parent.relative_to(classroom_dir).parts
+            breadcrumb = " > ".join(
+                p.split("_", 1)[1] if re.match(r"^\d{3}_", p) else p for p in rel_parts
+            )
+            overview.append(f"## {breadcrumb}\n{content}")
+        if overview:
+            (classroom_dir / "_Video-Uebersicht.txt").write_text(
+                "\n\n".join(overview) + "\n", encoding="utf-8"
+            )
+            self.log(f"  ✓ _Video-Uebersicht.txt geschrieben ({len(overview)} Lektionen)")
+
     # ------------------------------------------------------------------
     # Main run loop
     # ------------------------------------------------------------------
@@ -667,6 +705,7 @@ class SkoolDownloader:
                 for idx, lesson in enumerate(lessons, 1):
                     await self.process_url(page, lesson, classroom_dir, idx)
                     await asyncio.sleep(1)
+                self._write_classroom_overview(classroom_dir)
 
                 # --- Feed ---
                 feed_dir = comm_dir / "feed"

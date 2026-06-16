@@ -57,22 +57,49 @@ python skool_downloader.py --email deine@email.com --password deinpasswort --out
 
 ## Ordnerstruktur der Downloads
 
+Der Classroom wird verschachtelt nach Modul/Abschnitt/Lektion angelegt
+(genau wie im Skool-Classroom selbst), nicht alles flach in einen Ordner:
+
 ```
 skool_downloads/
 ├── meine-community/
 │   ├── classroom/
-│   │   ├── Modul 1 - Einführung/
-│   │   │   ├── 001_Willkommen.mp4
-│   │   │   └── arbeitsblatt.pdf
-│   │   └── Modul 2 - Fortgeschritten/
-│   │       └── 001_Lektion.mp4
+│   │   ├── Modul 1/
+│   │   │   ├── Abschnitt 1/
+│   │   │   │   ├── 001_Willkommen/
+│   │   │   │   │   ├── beschreibung.md
+│   │   │   │   │   ├── links.txt
+│   │   │   │   │   └── Willkommen.mp4
+│   │   │   │   └── 002_Lektion 2/...
+│   │   │   └── Abschnitt 2/...
+│   │   ├── Modul 2/...
+│   │   └── _Video-Uebersicht.txt   ← alle Video-/Datei-Links an einem Ort
 │   └── feed/
-│       ├── post_abc123/
-│       │   └── 001_Video.mp4
-│       └── post_def456/
-│           └── checkliste.pdf
+│       ├── 001_Post-Titel/
+│       │   └── ...
+│       └── 002_Post-Titel/...
 └── download.log
 ```
+
+`_Video-Uebersicht.txt` listet pro Lektion eine Überschrift mit dem
+vollständigen Pfad (`Modul 1 > Abschnitt 1 > Willkommen`) gefolgt von allen
+dort gefundenen Video- und Datei-Links – praktisch, um schnell zu sehen, wo
+ein YouTube-Link als Fallback hinterlegt ist, ohne jeden Lektionsordner
+einzeln zu öffnen.
+
+### Bereits heruntergeladene Inhalte nachträglich einsortieren
+
+Wenn du mit einer älteren Version schon Inhalte flach heruntergeladen hast
+(alles in einem Ordner statt nach Modul/Abschnitt sortiert), kannst du sie
+nachträglich umsortieren lassen, **ohne erneut etwas herunterzuladen**:
+
+```bash
+python skool_reorganize.py --output skool_downloads --community meine-gruppe
+```
+
+Das Skript erkennt dabei auch doppelt heruntergeladene Lektionen (z.B. durch
+mehrfaches Ausführen mit unterschiedlicher Gesamtanzahl an Lektionen) und
+führt sie zu einer einzigen Lektion zusammen, statt sie zu verdoppeln.
 
 ## Tipps & Hinweise
 
