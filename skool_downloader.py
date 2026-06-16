@@ -479,8 +479,21 @@ class SkoolDownloader:
         finally:
             page.remove_listener("request", _on_request)
 
+        # --- Links als Fallback-Referenz speichern (egal ob Download klappt) ---
+        unique_videos = unique(intercepted)
+        if unique_videos or attachment_urls:
+            link_lines = []
+            if unique_videos:
+                link_lines.append("## Video-Links")
+                link_lines.extend(unique_videos)
+            if attachment_urls:
+                link_lines.append("")
+                link_lines.append("## Datei-Links")
+                link_lines.extend(unique(attachment_urls))
+            (dest / "links.txt").write_text("\n".join(link_lines) + "\n", encoding="utf-8")
+
         # --- Videos herunterladen ------------------------------------------
-        for i, vurl in enumerate(unique(intercepted)):
+        for i, vurl in enumerate(unique_videos):
             if vurl in self._done:
                 continue
             self._done.add(vurl)
