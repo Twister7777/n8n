@@ -59,6 +59,7 @@ SKIP_SLUGS = {
 }
 
 VIDEO_DOMAINS = [
+    "stream.video.skool.com",
     "vimeo.com", "player.vimeo.com",
     "wistia.com", "wistia.net", "fast.wistia",
     "loom.com",
@@ -86,6 +87,11 @@ def sanitize(name: str) -> str:
 
 def is_video_url(url: str) -> bool:
     if not isinstance(url, str):
+        return False
+    if "edgemv" in url:
+        # Internal CDN renditions referenced *inside* the master manifest;
+        # yt-dlp resolves these automatically, downloading them directly
+        # would just create redundant/broken duplicates.
         return False
     for domain in VIDEO_DOMAINS:
         if domain in url:
@@ -262,69 +268,65 @@ class SkoolDownloader:
     # ------------------------------------------------------------------
 
     async def get_classroom_lessons(self, page: Page, slug: str) -> list[dict]:
-        """Return [{url, title}] for every lesson in the community classroom."""
-        url = f"{self.BASE}/{slug}/classroom"
-        self.log(f"  → Classroom öffnen: {url}")
-        await page.goto(url, wait_until="domcontentloaded")
+        """Return [{url, title}] for every lesson in the community classroom.
+
+        Skool exposes the course list under pageProps['allCourses'] and, once
+        a specific course page (/classroom/{course.name}) is opened, the full
+        module tree under pageProps['course'] = {course: {...}, children: [...]}.
+        The lesson URL is built from the *root course's* `name` (short slug)
+        plus the *module's* `id` (long hash) as the `md` query parameter.
+        """
+        overview_url = f"{self.BASE}/{slug}/classroom"
+        self.log(f"  → Classroom öffnen: {overview_url}")
+        await page.goto(overview_url, wait_until="domcontentloaded")
         await page.wait_for_timeout(3000)
 
-        lessons: dict[str, str] = {}   # url -> title
-
-        # --- 1) Aus dem __NEXT_DATA__-JSON die Kursstruktur lesen -------------
         data = await self.next_data(page)
         if data:
             self._dump_debug(data, f"{slug}_classroom")
-            for course_id, lesson_id, title in self._lessons_from_json(data):
-                u = f"{self.BASE}/{slug}/classroom/{course_id}?md={lesson_id}"
-                lessons.setdefault(u, title)
+        pp = (data or {}).get("props", {}).get("pageProps", {})
+        courses = pp.get("allCourses") or []
+        self.log(f"  ✓ {len(courses)} Kurse gefunden")
 
-        # --- 2) Zusätzlich sichtbare Classroom-Links aus dem DOM -------------
-        for course_link in await page.query_selector_all(f'a[href*="/{slug}/classroom/"]'):
-            href = (await course_link.get_attribute("href")) or ""
-            full = urljoin(self.BASE, href)
-            if full not in lessons:
-                txt = (await course_link.inner_text()).strip()
-                lessons[full] = txt or href.rsplit("/", 1)[-1]
-
-        # Visit each course landing page to expand the lessons it links to.
-        for course_url in list(lessons.keys()):
-            if re.search(r"/classroom/[^/?]+$", course_url):  # looks like a course root
-                try:
-                    await page.goto(course_url, wait_until="domcontentloaded")
-                    await page.wait_for_timeout(2000)
-                    cdata = await self.next_data(page)
-                    if cdata:
-                        for course_id, lesson_id, title in self._lessons_from_json(cdata):
-                            u = f"{self.BASE}/{slug}/classroom/{course_id}?md={lesson_id}"
-                            lessons.setdefault(u, title)
-                except Exception:
-                    pass
-
-        result = [{"url": u, "title": t} for u, t in lessons.items()]
-        self.log(f"  ✓ {len(result)} Classroom-Einträge gefunden")
-        return result
-
-    def _lessons_from_json(self, data: dict):
-        """Yield (course_id, lesson_id, title) tuples from a Skool JSON payload."""
-        # Find candidate course containers (objects holding a 'children' list).
-        for node in walk_dicts(data):
-            children = node.get("children")
-            root_id = node.get("id")
-            if not (isinstance(children, list) and root_id):
+        lessons: list[dict] = []
+        for course in courses:
+            root_name = course.get("name")
+            root_title = (course.get("metadata") or {}).get("title") or root_name
+            if not root_name:
                 continue
-            for child in walk_dicts({"_": children}):
-                cid = child.get("id")
-                if not cid or cid == root_id:
-                    continue
-                # A leaf (no further children) is treated as a lesson.
-                if not isinstance(child.get("children"), list) or not child.get("children"):
-                    title = (
-                        child.get("name")
-                        or (child.get("metadata") or {}).get("title")
-                        or child.get("title")
-                        or f"lesson_{cid[:8]}"
-                    )
-                    yield (root_id, cid, str(title))
+
+            course_url = f"{self.BASE}/{slug}/classroom/{root_name}"
+            try:
+                await page.goto(course_url, wait_until="domcontentloaded")
+                await page.wait_for_timeout(2500)
+            except Exception:
+                continue
+
+            cdata = await self.next_data(page)
+            cpp = (cdata or {}).get("props", {}).get("pageProps", {})
+            tree = cpp.get("course")
+            if not tree:
+                continue
+
+            for node in tree.get("children", []) or []:
+                lessons.extend(self._flatten_modules(node, slug, root_name, root_title))
+
+        self.log(f"  ✓ {len(lessons)} Lektionen insgesamt gefunden")
+        return lessons
+
+    def _flatten_modules(self, node: dict, slug: str, root_name: str, path_prefix: str) -> list[dict]:
+        """Recursively flatten a course's module tree into lesson entries."""
+        out: list[dict] = []
+        course = node.get("course") or {}
+        node_id = course.get("id")
+        title = (course.get("metadata") or {}).get("title") or course.get("name") or node_id
+        full_title = f"{path_prefix} - {title}" if path_prefix else str(title)
+        if node_id:
+            url = f"{self.BASE}/{slug}/classroom/{root_name}?md={node_id}"
+            out.append({"url": url, "title": full_title})
+        for child in node.get("children", []) or []:
+            out.extend(self._flatten_modules(child, slug, root_name, full_title))
+        return out
 
     # ------------------------------------------------------------------
     # Feed enumeration
@@ -369,6 +371,19 @@ class SkoolDownloader:
         try:
             await page.goto(item["url"], wait_until="domcontentloaded")
             await page.wait_for_timeout(3500)
+
+            # Der Skool-Videoplayer lädt den eigentlichen Stream erst, wenn man
+            # ihn aktiv anklickt (kein Autoplay). Ohne diesen Klick bleibt die
+            # Manifest-Anfrage (stream.video.skool.com/...m3u8) aus.
+            for sel in ["video", 'button[aria-label*="Play"]', '[class*="play"]', '[class*="Play"]']:
+                try:
+                    el = await page.query_selector(sel)
+                    if el:
+                        await el.click(timeout=3000)
+                        await page.wait_for_timeout(4000)
+                        break
+                except Exception:
+                    continue
 
             data = await self.next_data(page)
 
