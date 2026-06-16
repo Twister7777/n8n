@@ -439,7 +439,7 @@ class SkoolDownloader:
             attachment_urls: list[str] = []
             if data:
                 if self.debug:
-                    self._dump_debug(data, safe, sub=dest)
+                    self._dump_debug(data, dest.name, sub=dest)
                 for v in walk(data):
                     if not isinstance(v, str):
                         continue
