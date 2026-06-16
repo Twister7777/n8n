@@ -34,6 +34,115 @@ def total_size(folder: Path) -> int:
     return sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
 
 
+def _lesson_title(lesson_dir: Path) -> str:
+    """Best readable title: first '# Heading' of beschreibung.md, else folder."""
+    desc = lesson_dir / "beschreibung.md"
+    if desc.exists():
+        for line in desc.read_text(encoding="utf-8").splitlines():
+            if line.startswith("# "):
+                return line[2:].strip()
+    name = lesson_dir.name
+    m = FOLDER_RE.match(name)
+    return m.group(2) if m else name
+
+
+def _lesson_summary(lesson_dir: Path, limit: int = 220) -> str:
+    """Short 'what's it about' excerpt from beschreibung.md."""
+    desc = lesson_dir / "beschreibung.md"
+    if not desc.exists():
+        return ""
+    text_lines = []
+    for line in desc.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or s == "---":
+            continue
+        text_lines.append(s)
+    text = " ".join(text_lines)
+    if len(text) > limit:
+        text = text[:limit].rsplit(" ", 1)[0] + " …"
+    return text
+
+
+def _parse_links(lesson_dir: Path) -> tuple[list[str], list[str]]:
+    """Read a lesson's links.txt → (video_links, file_links)."""
+    lf = lesson_dir / "links.txt"
+    videos: list[str] = []
+    files: list[str] = []
+    if not lf.exists():
+        return videos, files
+    bucket = None
+    for line in lf.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith("## Video"):
+            bucket = videos
+        elif s.startswith("## Datei"):
+            bucket = files
+        elif s.startswith("http") and bucket is not None:
+            bucket.append(s)
+    return videos, files
+
+
+def build_overview(classroom_dir: Path) -> int:
+    """Write _Video-Uebersicht.txt: per Modul/Abschnitt the lesson title,
+    a short 'what's it about' line and the video/file links. Returns the
+    number of lessons listed."""
+    # A lesson folder is any dir that holds a links.txt or beschreibung.md.
+    lesson_dirs = set()
+    for marker in ("links.txt", "beschreibung.md"):
+        for f in classroom_dir.rglob(marker):
+            lesson_dirs.add(f.parent)
+
+    sections: dict[str, list[str]] = {}
+    order: list[str] = []
+    for lesson_dir in sorted(lesson_dirs, key=lambda d: str(d).lower()):
+        rel = lesson_dir.relative_to(classroom_dir).parts
+        crumb_parts = [
+            (FOLDER_RE.match(p).group(2) if FOLDER_RE.match(p) else p) for p in rel[:-1]
+        ]
+        section = " > ".join(crumb_parts) if crumb_parts else "Classroom"
+        title = _lesson_title(lesson_dir)
+        summary = _lesson_summary(lesson_dir)
+        videos, files = _parse_links(lesson_dir)
+
+        block = [f"### {title}"]
+        if summary:
+            block.append(f"   Worum geht's: {summary}")
+        for v in videos:
+            block.append(f"   🎬 Video: {v}")
+        for fl in files:
+            block.append(f"   📎 Datei: {fl}")
+        if not videos and not files:
+            block.append("   (kein Video-/Datei-Link gefunden)")
+
+        if section not in sections:
+            sections[section] = []
+            order.append(section)
+        sections[section].append("\n".join(block))
+
+    if not order:
+        return 0
+
+    out: list[str] = [
+        "VIDEO- & DOWNLOAD-ÜBERSICHT",
+        "Pro Modul/Abschnitt: jede Lektion, worum es geht und der passende Link.",
+        "",
+    ]
+    for section in order:
+        out.append("=" * 70)
+        out.append(f"MODUL/ABSCHNITT:  {section}")
+        out.append("=" * 70)
+        out.append("")
+        out.append("\n\n".join(sections[section]))
+        out.append("")
+
+    (classroom_dir / "_Video-Uebersicht.txt").write_text(
+        "\n".join(out) + "\n", encoding="utf-8"
+    )
+    return sum(len(v) for v in sections.values())
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--output", default="skool_downloads", help="Download-Ordner")
@@ -99,6 +208,10 @@ def main():
         print(f"  ✓ {' / '.join(parts)}")
 
     print(f"\nFertig: {moved} Lektionen einsortiert, {merged} Duplikat(e) zusammengeführt.")
+
+    n = build_overview(classroom_dir)
+    if n:
+        print(f"✓ _Video-Uebersicht.txt geschrieben ({n} Lektionen)")
     print(f"Neue Struktur unter: {classroom_dir}")
 
 

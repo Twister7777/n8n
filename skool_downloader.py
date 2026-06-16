@@ -648,24 +648,18 @@ class SkoolDownloader:
             pass
 
     def _write_classroom_overview(self, classroom_dir: Path):
-        """Aggregate every lesson's links.txt into one breadcrumb-grouped
-        overview file, so all video/attachment links can be skimmed
-        without opening every single lesson folder."""
-        overview: list[str] = []
-        for links_file in sorted(classroom_dir.rglob("links.txt")):
-            content = links_file.read_text(encoding="utf-8").strip()
-            if not content:
-                continue
-            rel_parts = links_file.parent.relative_to(classroom_dir).parts
-            breadcrumb = " > ".join(
-                p.split("_", 1)[1] if re.match(r"^\d{3}_", p) else p for p in rel_parts
-            )
-            overview.append(f"## {breadcrumb}\n{content}")
-        if overview:
-            (classroom_dir / "_Video-Uebersicht.txt").write_text(
-                "\n\n".join(overview) + "\n", encoding="utf-8"
-            )
-            self.log(f"  ✓ _Video-Uebersicht.txt geschrieben ({len(overview)} Lektionen)")
+        """Aggregate every lesson into one breadcrumb-grouped overview file
+        (Titel, 'Worum geht's', Video-/Datei-Links) so the whole classroom
+        can be skimmed without opening every single lesson folder. Uses the
+        shared builder from skool_reorganize so both scripts stay identical."""
+        try:
+            from skool_reorganize import build_overview
+        except Exception as e:
+            self.log(f"  (Übersicht übersprungen: {e})")
+            return
+        n = build_overview(classroom_dir)
+        if n:
+            self.log(f"  ✓ _Video-Uebersicht.txt geschrieben ({n} Lektionen)")
 
     # ------------------------------------------------------------------
     # Main run loop
