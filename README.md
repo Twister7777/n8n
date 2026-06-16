@@ -5,8 +5,13 @@ Lädt automatisch **alle Videos, Kursvideos und Dateianhänge** aus deinen Skool
 ## Was wird heruntergeladen?
 
 - Videos aus dem **Classroom** (alle Module & Lektionen)
+- **Beschreibungstexte** jeder Lektion (als `beschreibung.md`)
 - Videos aus **Feed-Posts** (Vimeo, Wistia, YouTube, Loom, direkte MP4-Links)
 - **Dateianhänge** (PDFs, ZIPs, Word-Dokumente, Excel-Tabellen, etc.)
+- Zur Sicherheit: die kompletten Rohdaten jeder Seite als `_raw_*.json`
+
+> Das Tool liest die Inhalte aus dem in Skool eingebetteten `__NEXT_DATA__`-JSON
+> (Next.js). Das ist deutlich zuverlässiger als sichtbare HTML-Elemente zu suchen.
 
 ## Voraussetzungen
 
